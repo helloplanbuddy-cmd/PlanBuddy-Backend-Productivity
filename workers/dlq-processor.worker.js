@@ -39,7 +39,7 @@ async function processDLQ() {
 
           // Write to DLQ table for manual review
           await db.query(`
-            INSERT INTO dlq_jobs (queue_name, job_id, payload, failed_reason, stacktrace, created_at)
+            INSERT INTO dead_letter_jobs (queue_name, job_id, payload, failed_reason, stacktrace, created_at)
             VALUES ($1, $2, $3, $4, $5, NOW())
             ON CONFLICT (job_id) DO NOTHING
           `, [name, job.id, JSON.stringify(job.data), job.failedReason, JSON.stringify(job.stacktrace || [])]);
@@ -49,7 +49,7 @@ async function processDLQ() {
       }
 
       // Clean old DLQ >7days
-      await db.query(`DELETE FROM dlq_jobs WHERE created_at < NOW() - INTERVAL '7 days'`);
+      await db.query(`DELETE FROM dead_letter_jobs WHERE created_at < NOW() - INTERVAL '7 days'`);
     }
   } catch (err) {
     logger.error('DLQ processor failed', { error: err.message });

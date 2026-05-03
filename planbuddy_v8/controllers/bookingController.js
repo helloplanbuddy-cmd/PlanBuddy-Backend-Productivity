@@ -334,6 +334,57 @@ exports.cancelBooking = async (req, res, next) => {
   }
 };
 
+// ─── GET /admin/bookings ─────────────────────────────────────────────────────
+exports.getAllBookings = async (req, res, next) => {
+  try {
+    const page   = Math.max(1, parseInt(req.query.page  || '1',  10));
+    const limit  = Math.min(50, parseInt(req.query.limit || '20', 10));
+    const offset = (page - 1) * limit;
+    const status = req.query.status;
+
+    let whereClause = '';
+    const params    = [];
+
+    if (status) {
+      params.push(status);
+      whereClause = 'WHERE b.status = $1';
+    }
+
+    const [bookings, countResult] = await Promise.all([
+      db.query(
+        `SELECT
+           b.id, b.status, b.payment_status, b.group_size, b.total_amount, b.travel_date, b.created_at,
+           t.title        AS trip_title,
+           u.name         AS user_name,
+           u.email        AS user_email
+         FROM bookings b
+         LEFT JOIN trips    t ON b.trip_id    = t.id
+         LEFT JOIN users    u ON b.user_id    = u.id
+         ${whereClause}
+         ORDER BY b.created_at DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      ),
+      db.query(
+        `SELECT COUNT(*) FROM bookings b ${whereClause}`,
+        params
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    res.json({
+      success: true,
+      data: {
+        bookings:   bookings.rows,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /bookings/check-availability ────────────────────────────────────────
 exports.checkAvailability = async (req, res, next) => {
   try {

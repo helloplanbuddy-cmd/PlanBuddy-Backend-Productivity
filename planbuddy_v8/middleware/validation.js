@@ -66,4 +66,47 @@ function validateAll(schemas) {
   };
 }
 
-module.exports = { validate, validateAll };
+const { z } = require('zod');
+
+// ─── Validation Schemas ──────────────────────────────────────────────────────
+
+// Booking schemas
+const CreateBookingSchema = z.object({
+  tripId:         z.string().uuid('Invalid trip ID'),
+  travelDate:     z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format (YYYY-MM-DD)'),
+  groupSize:      z.number().int().min(1, 'Group size must be at least 1').max(50, 'Group size cannot exceed 50'),
+  slotId:         z.string().uuid().optional(),
+  idempotencyKey: z.string().max(255).optional(),
+});
+
+const GetBookingsSchema = z.object({
+  page:   z.string().regex(/^\d+$/).transform(Number).refine(n => n >= 1, 'Page must be >= 1').optional(),
+  limit:  z.string().regex(/^\d+$/).transform(Number).refine(n => n >= 1 && n <= 50, 'Limit must be 1-50').optional(),
+  status: z.enum(['pending', 'confirmed', 'cancelled', 'completed', 'expired', 'failed']).optional(),
+});
+
+const CancelBookingSchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
+// Payment schemas
+const CreateOrderSchema = z.object({
+  bookingId: z.string().uuid('Invalid booking ID'),
+});
+
+const VerifyPaymentSchema = z.object({
+  razorpay_order_id:    z.string().min(1).max(100),
+  razorpay_payment_id:  z.string().min(1).max(100),
+  razorpay_signature:   z.string().min(1).max(500),
+  amount:               z.number().int().min(1),
+  currency:             z.string().length(3).default('INR'),
+});
+
+// Admin schemas
+const AdminBookingsSchema = z.object({
+  page:   z.string().regex(/^\d+$/).transform(Number).refine(n => n >= 1).optional(),
+  limit:  z.string().regex(/^\d+$/).transform(Number).refine(n => n >= 1 && n <= 50).optional(),
+  status: z.enum(['pending', 'confirmed', 'cancelled', 'completed', 'expired', 'failed']).optional(),
+});
+
+module.exports = { validate, validateAll, CreateBookingSchema, GetBookingsSchema, CancelBookingSchema, CreateOrderSchema, VerifyPaymentSchema, AdminBookingsSchema };

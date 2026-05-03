@@ -32,6 +32,8 @@ const WORKER_ID = `payment-recovery-${process.pid}`;
 const QUEUE_NAME = 'payment-recovery';
 const JOB_NAME = 'payment-recovery';
 const RUN_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+const LOCK_KEY = 'payment-reconciliation-lock';
+const LOCK_TTL_S = 5 * 60; // 5 minutes
 
 /**
  * Find orphaned payments.
@@ -109,6 +111,21 @@ async function runReconciliation() {
   const correlationId = `pay-rec-${Date.now()}`;
   logger.info('Payment reconciliation started', { correlationId });
 
+  // Acquire distributed lock
+  const { redis } = require('../config/redis');
+  if (!redis) {
+    logger.warn('Redis unavailable — skipping reconciliation to prevent conflicts');
+    return { skipped: true, reason: 'redis_unavailable' };
+  }
+
+  const lockAcquired = await redis.set(LOCK_KEY, WORKER_ID, 'EX', LOCK_TTL_S, 'NX');
+  if (!lockAcquired) {
+    logger.info('Payment reconciliation skipped — lock held by another instance', { correlationId });
+    return { skipped: true, reason: 'lock_held' };
+  }
+
+  logger.info('Payment reconciliation lock acquired', { correlationId, workerId: WORKER_ID });
+
   let processed = 0;
   let recovered = 0;
   let failed = 0;
@@ -160,6 +177,14 @@ async function runReconciliation() {
     });
 
     return { processed, recovered, failed, error: err.message };
+  } finally {
+    // Release lock
+    try {
+      await redis.del(LOCK_KEY);
+      logger.info('Payment reconciliation lock released', { correlationId });
+    } catch (err) {
+      logger.error('Failed to release lock', { correlationId, error: err.message });
+    }
   }
 }
 

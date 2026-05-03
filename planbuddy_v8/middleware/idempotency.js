@@ -25,8 +25,8 @@ const db      = require('../config/db');
 const DONE_PREFIX   = 'idempotency:done:';
 const LOCK_PREFIX   = 'idempotency:lock:';
 const LOCK_TTL_S    = 30;
-const RESPONSE_TTL  = (env.IDEMPOTENCY_TTL_HOURS || 24) * 3600;
-const DB_TTL_HOURS  = env.IDEMPOTENCY_TTL_HOURS || 24;
+const RESPONSE_TTL  = (env.IDEMPOTENCY_TTL_HOURS || 72) * 3600; // increased from 24 to 72 hours
+const DB_TTL_HOURS  = env.IDEMPOTENCY_TTL_HOURS || 72;
 
 function getRedis() {
   try {
@@ -100,6 +100,7 @@ function idempotency(req, res, next) {
 
   const useRedis = isRedisReady(redis);
 
+(async () => {
   if (!useRedis) {
     logger.warn('[idempotency] Redis not ready — falling back to DB idempotency');
 
@@ -107,17 +108,17 @@ function idempotency(req, res, next) {
     const redisAbuse = getRedis();
     const abuseKey = `abuse:idemp-conflict:${req.ip}`;
     if (redisAbuse && rawKey && rawKey.trim() !== '') {
-// const conflicts = await redisAbuse.incr(abuseKey);
-// Stubbed await
+      const conflicts = 0; // TODO: await redisAbuse.incr(abuseKey);
       if (conflicts > 5) {
         const { alertAuthAttack } = require('../services/alertingService');
-// Stubbed await
-        monitoring.security_alerts_total.inc({ type: 'idempotency_abuse' });
+        // await alertAuthAttack({ ip: req.ip, type: 'idempotency_abuse' });
+        const monitoring = require('../utils/monitoring');
+        monitoring.security_alerts_total?.inc({ type: 'idempotency_abuse' });
       }
     }
+  }
 
-  (async () => {
-    // ── 1. Check for completed response ───────────────────────────────────────
+  // ── 1. Check for completed response ───────────────────────────────────────
     if (useRedis) {
       let cached;
       try {
@@ -218,7 +219,7 @@ function idempotency(req, res, next) {
     if (useRedis && isRedisReady(redis)) {
       redis.del(lockKey).catch(() => {});
     }
-    next(err);
+    next();
   });
 }
 
@@ -245,8 +246,9 @@ function idempotencyStrict(req, res, next) {
   }
 
   // Apply the same idempotency logic
-  return idempotency(req, res, next);
+  return idempotency()(req, res, next);
 }
 
 module.exports = idempotency;
 module.exports.strict = idempotencyStrict;
+

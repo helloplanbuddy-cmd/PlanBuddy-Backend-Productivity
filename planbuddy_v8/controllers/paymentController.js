@@ -50,9 +50,11 @@ exports.createOrder = async (req, res, next) => {
 
     // Fetch booking and verify ownership
     const bookingResult = await db.query(
-      `SELECT id, user_id, total_amount, currency, status, payment_status
-       FROM bookings
-       WHERE id = $1 AND user_id = $2`,
+      `SELECT b.id, b.user_id, b.total_amount, b.currency, b.status, b.payment_status, b.group_size,
+              t.price, t.is_active
+       FROM bookings b
+       JOIN trips t ON b.trip_id = t.id
+       WHERE b.id = $1 AND b.user_id = $2`,
       [bookingId, req.user.id]
     );
 
@@ -65,6 +67,35 @@ exports.createOrder = async (req, res, next) => {
     }
 
     const booking = bookingResult.rows[0];
+
+    // 🔥 CRITICAL FIX — Server-side amount validation BEFORE Razorpay order creation
+    // Prevent charging wrong amounts if booking total_amount was tampered or miscalculated
+    const expectedAmount = booking.price * booking.group_size;
+    if (booking.total_amount !== expectedAmount) {
+      logger.error({
+        service:    'payment',
+        booking_id: bookingId,
+        user_id:    req.user.id,
+        expected:   expectedAmount,
+        actual:     booking.total_amount,
+        requestId:  req.requestId,
+        traceId:    req.traceId,
+      }, '[payment] Amount validation failed: booking total_amount does not match trip price * group_size');
+      return res.status(400).json({
+        success: false,
+        code:    'AMOUNT_VALIDATION_FAILED',
+        message: 'Booking amount validation failed. Please contact support.',
+      });
+    }
+
+    // Additional safety: ensure trip is still active
+    if (!booking.is_active) {
+      return res.status(409).json({
+        success: false,
+        code:    'TRIP_INACTIVE',
+        message: 'Trip is no longer available',
+      });
+    }
 
     // 🔥 PHASE 1 FIX — Only allow order creation for pending/unpaid bookings
     if (booking.status !== 'pending' || booking.payment_status !== 'unpaid') {
@@ -229,6 +260,28 @@ exports.verifyPayment = async (req, res, next) => {
         message: err.message,
       });
     }
+    next(err);
+  }
+};
+
+// ─── POST /admin/reconcile ───────────────────────────────────────────────────
+exports.manualReconcile = async (req, res, next) => {
+  try {
+    logger.info('Manual reconciliation triggered by admin', {
+      userId: req.user.id,
+      requestId: req.requestId,
+    });
+
+    // Trigger reconciliation (idempotent)
+    const { runReconciliation } = require('../workers/paymentReconciliation.worker.js');
+    const result = await runReconciliation();
+
+    res.json({
+      success: true,
+      message: 'Manual reconciliation completed',
+      data:    result,
+    });
+  } catch (err) {
     next(err);
   }
 };

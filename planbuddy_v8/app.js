@@ -103,8 +103,8 @@ app.use(cors({
 
 // ─── Raw body for Razorpay webhook (MUST come before express.json) ────────────
 // Path matches the ACTUAL registered route — both versioned and legacy
-app.use('/api/v1/payment/webhook/razorpay', express.raw({ type: 'application/json', limit: '512kb' }));
-app.use('/api/payment/webhook/razorpay',    express.raw({ type: 'application/json', limit: '512kb' }));
+app.use('/api/v1/payment/webhook/razorpay', express.raw({ type: 'application/json', limit: '100kb' }));
+app.use('/api/payment/webhook/razorpay',    express.raw({ type: 'application/json', limit: '100kb' }));
 
 // ─── JSON / URL-encoded body parsers ─────────────────────────────────────────
 app.use(express.json({ limit: '512kb' }));
@@ -205,5 +205,43 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on port ${port}`));
+const server = app.listen(port, () => console.log(`Server running on port ${port}`));
+
+// ─── Graceful shutdown (SIGTERM) ──────────────────────────────────────────────
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received — starting graceful shutdown');
+
+  // 1. Stop accepting new connections
+  server.close(async () => {
+    logger.info('HTTP server closed — no new connections');
+
+    // 2. Close BullMQ queues
+    try {
+      const { closeQueues } = require('./config/queues');
+      await closeQueues();
+      logger.info('BullMQ queues closed');
+    } catch (err) {
+      logger.error({ err }, 'Error closing queues');
+    }
+
+    // 3. Close DB connections
+    try {
+      const db = require('./config/db');
+      await db.end();
+      logger.info('DB connections closed');
+    } catch (err) {
+      logger.error({ err }, 'Error closing DB');
+    }
+
+    logger.info('Graceful shutdown complete');
+    process.exit(0);
+  });
+
+  // Timeout fallback (30s)
+  setTimeout(() => {
+    logger.error('Graceful shutdown timeout — forcing exit');
+    process.exit(1);
+  }, 30000);
+});
+
 module.exports = app;
