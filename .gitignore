@@ -11,6 +11,6 @@ dist/
 pm2/
 Docker secrets
 secrets/
-migrations/*.sql  # Block migration scripts if they contain secrets
+
 config/env.js     # Block if it has hardcoded secrets (check first)
 

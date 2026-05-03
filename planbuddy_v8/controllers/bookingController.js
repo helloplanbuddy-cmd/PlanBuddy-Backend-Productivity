@@ -295,8 +295,7 @@ exports.cancelBooking = async (req, res, next) => {
       }
     }
 
-    // Pending / failed / expired — simple cancel (no refund needed)
-    const booking = await DbService.cancelBooking(bookingId, reason || 'Cancelled by user');
+    const booking = await require('../services/dbService').cancelBooking(bookingId, req.headers['idempotency-key'] || crypto.randomUUID(), reason || 'Cancelled by user', req.user.id);
 
     try {
       const userResult = await db.query('SELECT id, email, name FROM users WHERE id=$1', [req.user.id]);

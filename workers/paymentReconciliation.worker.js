@@ -65,172 +65,40 @@ async function findOrphanedPayments() {
  * Returns: { recovered: boolean, action: string, details: object }
  */
 async function recoverPayment(payment) {
-  const { payment_id, razorpay_payment_id, razorpay_order_id, booking_id, amount } = payment;
+  const { payment_id, razorpay_payment_id, booking_id } = payment;
+  const idempotencyKey = `rec-${payment.payment_id}-${Date.now()}`;
 
-  // If no Razorpay payment ID, can't recover
-  if (!razorpay_payment_id) {
-    return {
-      recovered: false,
-      action: 'no_razorpay_id',
-      details: { payment_id },
-    };
-  }
+  const ExecutionSafety = require('../services/executionSafety');
+  const DbService = require('../services/dbService');
 
   try {
-    // Call Razorpay API to get actual status
-    const razorpayPayment = await RazorpayService.verifyPaymentWithAPI(razorpay_payment_id);
+    // Use unified safety layer
+    const result = await ExecutionSafety.executeWithIdempotency(idempotencyKey, async (client) => {
+      const razorpayPayment = await RazorpayService.verifyPaymentWithAPI(razorpay_payment_id);
+      
+      if (!razorpayPayment) return { recovered: false, action: 'razorpay_not_found' };
 
-    if (!razorpayPayment) {
-      // Payment not found in Razorpay - might be pending or failed
-      return {
-        recovered: false,
-        action: 'razorpay_not_found',
-        details: { payment_id, razorpay_payment_id },
-      };
-    }
+      const razorpayStatus = razorpayPayment.status;
 
-    const razorpayStatus = razorpayPayment.status; // 'captured', 'failed', 'refunded'
+      // Delegate to service layer for DB mutations
+      if (razorpayStatus === 'captured') {
+        return await DbService.reconcilePaymentCaptured(client, payment_id, booking_id);
+      } 
+      if (razorpayStatus === 'failed') {
+        return await DbService.reconcilePaymentFailed(client, payment_id, booking_id);
+      }
+      if (razorpayStatus === 'refunded') {
+        return await DbService.reconcilePaymentRefunded(client, payment_id, booking_id);
+      }
 
-    // Log the reconciliation attempt
-    await db.query(
-      `INSERT INTO payment_reconciliation_logs
-        (payment_id, razorpay_payment_id, booking_id, status_before, status_after, action_taken, amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT DO NOTHING`,
-      [payment_id, razorpay_payment_id, booking_id, payment.payment_status, razorpayStatus, 'api_check', amount]
-    );
-
-    // If captured - force confirm the booking
-    if (razorpayStatus === 'captured') {
-      await db.transaction(async (client) => {
-        // Update payment status
-        await client.query(
-          `UPDATE payments
-           SET status = 'captured', updated_at = NOW()
-           WHERE id = $1`,
-          [payment_id]
-        );
-
-        // Confirm booking if not already confirmed
-        if (payment.booking_status !== 'confirmed') {
-          await client.query(
-            `UPDATE bookings
-             SET status = 'confirmed',
-                 payment_status = 'paid',
-                 confirmed_at = NOW(),
-                 updated_at = NOW()
-             WHERE id = $1`,
-            [booking_id]
-          );
-
-          // Mark reconciliation checked
-          await client.query(
-            `UPDATE bookings
-             SET reconciliation_checked_at = NOW(),
-                 last_recovery_attempt = NOW()
-             WHERE id = $1`,
-            [booking_id]
-          );
-        }
-      });
-
-      logger.info('Payment recovered via API', {
-        payment_id,
-        razorpay_payment_id,
-        booking_id,
-        razorpayStatus,
-      });
-
-      return {
-        recovered: true,
-        action: 'confirmed',
-        details: { payment_id, razorpay_payment_id, booking_id, razorpayStatus },
-      };
-    }
-
-    // If failed - mark booking as failed
-    if (razorpayStatus === 'failed') {
-      await db.transaction(async (client) => {
-        await client.query(
-          `UPDATE payments
-           SET status = 'failed', updated_at = NOW()
-           WHERE id = $1`,
-          [payment_id]
-        );
-
-        if (booking_id) {
-          await client.query(
-            `UPDATE bookings
-             SET status = 'failed',
-                 payment_status = 'failed',
-                 updated_at = NOW()
-             WHERE id = $1`,
-            [booking_id]
-          );
-        }
-      });
-
-      logger.warn('Payment marked as failed after reconciliation', {
-        payment_id,
-        razorpay_payment_id,
-        booking_id,
-      });
-
-      return {
-        recovered: true,
-        action: 'marked_failed',
-        details: { payment_id, razorpay_payment_id, booking_id, razorpayStatus },
-      };
-    }
-
-    // If refunded - sync state
-    if (razorpayStatus === 'refunded') {
-      await db.transaction(async (client) => {
-        await client.query(
-          `UPDATE payments
-           SET status = 'refunded', updated_at = NOW()
-           WHERE id = $1`,
-          [payment_id]
-        );
-
-        if (booking_id) {
-          await client.query(
-            `UPDATE bookings
-             SET payment_status = 'refunded',
-                 status = 'cancelled',
-                 cancelled_at = NOW(),
-                 updated_at = NOW()
-             WHERE id = $1`,
-            [booking_id]
-          );
-        }
-      });
-
-      return {
-        recovered: true,
-        action: 'synced_refunded',
-        details: { payment_id, razorpay_payment_id, booking_id, razorpayStatus },
-      };
-    }
-
-    // Unknown status - leave as-is
-    return {
-      recovered: false,
-      action: 'unknown_razorpay_status',
-      details: { payment_id, razorpay_payment_id, razorpayStatus },
-    };
-  } catch (err) {
-    logger.error('Payment recovery failed', {
-      payment_id,
-      razorpay_payment_id,
-      error: err.message,
+      return { recovered: false, action: 'unknown_status', razorpayStatus };
     });
 
-    return {
-      recovered: false,
-      action: 'error',
-      details: { payment_id, razorpay_payment_id, error: err.message },
-    };
+    logger.info('Worker payment recovery', { payment_id, result });
+    return result;
+  } catch (err) {
+    logger.error('Worker recovery failed', { payment_id, error: err.message });
+    return { recovered: false, action: 'error', details: { payment_id, error: err.message } };
   }
 }
 

@@ -40,7 +40,7 @@ function makeRedisStore(prefix) {
     // 🔥 CRITICAL ALERT: Log + metric when falling back to MemoryStore
     // This happens during Redis downtime, planned maintenance, or connection issues.
     // Under multi-instance deployment, this means rate limiting is per-process (unprotected).
-    logger.critical('RATE_LIMIT_BYPASS',
+logger.error('RATE_LIMIT_BYPASS',
       'Rate limiter falling back to MemoryStore — brute-force attacks possible', {
       service: 'rateLimit',
     });
@@ -127,8 +127,8 @@ const authLimiter = makeLimiter({
  */
 const bookingLimiter = makeLimiter({
   name:      'booking',
-  windowMs:  15 * 60 * 1000,
-  max:       30,
+  windowMs:  60 * 1000,
+  max:       10,
   keyGenerator: userKey,
 });
 
@@ -138,8 +138,8 @@ const bookingLimiter = makeLimiter({
  */
 const verifyPaymentLimiter = makeLimiter({
   name:      'verify-payment',
-  windowMs:  15 * 60 * 1000,
-  max:       20,
+  windowMs:  60 * 1000,
+  max:       10,
   keyGenerator: userKey,
 });
 
@@ -150,8 +150,8 @@ const verifyPaymentLimiter = makeLimiter({
  */
 const webhookLimiter = makeLimiter({
   name:      'webhook',
-  windowMs:  1 * 60 * 1000,
-  max:       200,
+  windowMs:  60 * 1000,
+  max:       100,
   keyGenerator: ipKey,
 });
 
@@ -176,4 +176,14 @@ module.exports = {
   webhookLimiter,
   adminLimiter,
   adminReconcile,
+  /**
+   * Fintech abuse: Rate limit repeated idempotency key conflicts (brute force probing)
+   * 3 conflicts / 5 min per IP
+   */
+  idempotencyConflictLimiter: makeLimiter({
+    name:      'idempotency_conflict',
+    windowMs:  5 * 60 * 1000,
+    max:       3,
+    keyGenerator: (req) => req.ip,
+  }),
 };

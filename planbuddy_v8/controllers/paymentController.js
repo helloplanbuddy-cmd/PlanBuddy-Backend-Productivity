@@ -239,6 +239,20 @@ exports.razorpayWebhook = async (req, res, next) => {
   const correlationId = req.requestId;
 
   try {
+    // Fintech: Webhook retry storm detector
+    const redis = require('../config/redis').redis;
+    const paymentId = req.body.razorpay_payment_id;
+    if (paymentId) {
+      const retryKey = `webhook_retry:${paymentId}`;
+      const retries = await redis.incr(retryKey);
+      if (retries === 1) await redis.expire(retryKey, 300); // 5min TTL
+      if (retries > 3) {
+        const { alertSystemOverload } = require('../services/alertingService');
+        await alertSystemOverload('webhook_retries', retries, 3);
+        monitoring.webhook_retry_storm_total?.inc();
+      }
+    }
+
     if (!Buffer.isBuffer(req.body)) {
       monitoring.webhook_errors_total?.inc({ type: 'not_buffer' });
       return res.status(400).json({

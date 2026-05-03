@@ -26,6 +26,39 @@
 const db = require('../config/db');
 const logger = require('../utils/logger');
 const monitoring = require('../utils/monitoring');
+const env = require('../config/env');
+const axios = require('axios');
+
+async function sendSlackAlert(alert) {
+  if (!env.SLACK_WEBHOOK_URL) {
+    logger.debug('SLACK_WEBHOOK_URL not set, skipping Slack alert');
+    return;
+  }
+
+  const slackPayload = {
+    text: `🚨 *PlanBuddy Alert* (${alert.severity.toUpperCase()})`,
+    blocks: [{
+      type: 'header',
+      text: { type: 'plain_text', text: `🔥 ${alert.alert_type} - ${alert.severity}` }
+    }, {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Message:* ${alert.message}` }
+    }, {
+      type: 'context',
+      elements: [{
+        type: 'mrkdwn',
+        text: `*Entity:* ${alert.entity_type}/${alert.entity_id}`
+      }]
+    }]
+  };
+
+  try {
+    await axios.post(env.SLACK_WEBHOOK_URL, slackPayload);
+    logger.info('Slack alert sent', { alert_type: alert.alert_type });
+  } catch (err) {
+    logger.error('Slack alert failed', { error: err.message, alert_type: alert.alert_type });
+  }
+}
 
 const ALERT_SEVERITY = {
   INFO: 'info',
@@ -86,6 +119,7 @@ async function createAlert({
   // Log to console/file as fallback
   if (severity === ALERT_SEVERITY.CRITICAL) {
     logger.critical(alertType, message, { entityType, entityId, metadata });
+    await sendSlackAlert(alert);
   } else {
     logger.warn(alertType, message, { entityType, entityId, metadata });
   }

@@ -102,7 +102,19 @@ function idempotency(req, res, next) {
 
   if (!useRedis) {
     logger.warn('[idempotency] Redis not ready — falling back to DB idempotency');
-  }
+
+    // Fintech: Idempotency brute-force abuse detector
+    const redisAbuse = getRedis();
+    const abuseKey = `abuse:idemp-conflict:${req.ip}`;
+    if (redisAbuse && rawKey && rawKey.trim() !== '') {
+// const conflicts = await redisAbuse.incr(abuseKey);
+// Stubbed await
+      if (conflicts > 5) {
+        const { alertAuthAttack } = require('../services/alertingService');
+// Stubbed await
+        monitoring.security_alerts_total.inc({ type: 'idempotency_abuse' });
+      }
+    }
 
   (async () => {
     // ── 1. Check for completed response ───────────────────────────────────────

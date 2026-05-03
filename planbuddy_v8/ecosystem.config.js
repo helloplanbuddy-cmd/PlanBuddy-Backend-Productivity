@@ -41,6 +41,7 @@ module.exports = {
     {
       name:               'planbuddy-workers',
       script:             'workers/index.js',
+
       instances:          1,          // fork mode — queues handle concurrency internally
       exec_mode:          'fork',
       watch:              false,
@@ -75,5 +76,39 @@ module.exports = {
       error_file:         'logs/maintenance-error.log',
       out_file:           'logs/maintenance-out.log',
     },
+
+    // ── Alert Poller (Fintech upgrade) ──────────────────────────────────────
+    // Escalates unacknowledged CRITICAL alerts every 5min → Slack
+    {
+      name:               'planbuddy-alert-poller',
+      script:             'workers/alert-poller.worker.js',
+      instances:          1,
+      exec_mode:          'fork',
+      watch:              false,
+      max_memory_restart: '128M',
+      env:            { NODE_ENV: 'development' },
+      env_production: { NODE_ENV: 'production'  },
+      log_date_format:    'YYYY-MM-DD HH:mm:ss Z',
+      error_file:         'logs/alert-poller-error.log',
+      out_file:           'logs/alert-poller-out.log',
+    },
+
+    // ── DLQ Processor (Fintech recovery) ─────────────────────────────────────
+    // Processes BullMQ failed jobs → dlq_jobs table + Slack alert every 10min
+    {
+      name:               'planbuddy-dlq-processor',
+      script:             'workers/dlq-processor.worker.js',
+      instances:          1,
+      exec_mode:          'fork',
+      watch:              false,
+      max_memory_restart: '128M',
+      env:            { NODE_ENV: 'development' },
+      env_production: { NODE_ENV: 'production'  },
+      log_date_format:    'YYYY-MM-DD HH:mm:ss Z',
+      error_file:         'logs/dlq-processor-error.log',
+      out_file:           'logs/dlq-processor-out.log',
+    },
+
   ],
+
 };
